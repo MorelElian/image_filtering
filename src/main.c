@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <sys/time.h>
-
+#include <mpi.h>
 #include "gif_lib.h"
 
 /* Set this macro to 1 to enable debugging information */
@@ -573,6 +573,10 @@ store_pixels( char * filename, animated_gif * image )
     return 1 ;
 }
 
+void apply_gray_filter(animated_gif * image);
+
+#define CONV(l,c,nb_c) \
+    (l)*(nb_c)+(c)
 void
 apply_gray_filter( animated_gif * image )
 {
@@ -597,10 +601,6 @@ apply_gray_filter( animated_gif * image )
         }
     }
 }
-
-#define CONV(l,c,nb_c) \
-    (l)*(nb_c)+(c)
-
 void apply_gray_line( animated_gif * image ) 
 {
     int i, j, k ;
@@ -856,7 +856,11 @@ main( int argc, char ** argv )
     animated_gif * image ;
     struct timeval t1, t2;
     double duration ;
-
+    int rank,size,chunk_size;
+    animated_gif* subgroup;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
     /* Check command-line arguments */
     if ( argc < 3 )
     {
@@ -872,6 +876,8 @@ main( int argc, char ** argv )
 
     /* Load file and store the pixels in array */
     image = load_pixels( input_filename ) ;
+    chunck_size = image->n_images / size;
+    
     if ( image == NULL ) { return 1 ; }
 
     /* IMPORT Timer stop */
