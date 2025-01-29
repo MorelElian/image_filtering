@@ -1,0 +1,17 @@
+#!/bin/bash -l
+#SBATCH -N 1
+
+input_dir="./images/original"
+output_dir="./images/processed"
+
+for input_file in $input_dir/*
+do
+  if [ -f "$input_file" ]; then # vérifie que le fichier est un fichier régulier
+    output_file="$output_dir/$(basename "$input_file" .gif)-b.gif"
+    for nprocs in {1..8}
+    do
+      mpirun -n $nprocs ./sobelf "$input_file" "$output_file" 1
+    done
+  fi
+done
+

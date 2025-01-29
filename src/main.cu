@@ -6,41 +6,27 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <math.h>
 #include <sys/time.h>
-#include <cuda_runtime.h>
-
-
+#include <mpi.h>
 #include "gif_lib.h"
+#include "structs.h"
+#include "vanilla_function.c"
+#include "kernels.cu"
+
+//#include "kernels.h"
+
 
 /* Set this macro to 1 to enable debugging information */
 #define SOBELF_DEBUG 0
-
-/* Represent one pixel from the image */
-typedef struct pixel
-{
-    int r ; /* Red */
-    int g ; /* Green */
-    int b ; /* Blue */
-} pixel ;
-
-/* Represent one GIF image (animated or not */
-typedef struct animated_gif
-{
-    int n_images ; /* Number of images */
-    int * width ; /* Width of each image */
-    int * height ; /* Height of each image */
-    pixel ** p ; /* Pixels of each image */
-    GifFileType * g ; /* Internal representation.
-                         DO NOT MODIFY */
-} animated_gif ;
-
+#define USE_GPU 1
+#define THREADS 256
 /*
  * Load a GIF image from a file and return a
  * structure of type animated_gif.
  */
-animated_gif *
-load_pixels( char * filename ) 
+animated_gif * load_pixels( char * filename ) 
 {
     GifFileType * g ;
     ColorMapObject * colmap ;
@@ -247,7 +233,7 @@ store_pixels( char * filename, animated_gif * image )
     int i, j, k ;
     GifColorType * colormap ;
 
-    /* Initialize the new set of colors */
+    /* Initialize the new_p set of colors */
     colormap = (GifColorType *)malloc( 256 * sizeof( GifColorType ) ) ;
     if ( colormap == NULL ) 
     {
@@ -352,7 +338,7 @@ store_pixels( char * filename, animated_gif * image )
                     }
 
 #if SOBELF_DEBUG
-                    printf( "[DEBUG]\tNew color %d\n",
+                    printf( "[DEBUG]\tnewa color %d\n",
                             n_colors ) ;
 #endif
 
@@ -437,7 +423,7 @@ store_pixels( char * filename, animated_gif * image )
                         }
 
 #if SOBELF_DEBUG
-                        printf( "[DEBUG]\tNew color %d\n",
+                        printf( "[DEBUG]\tnewa color %d\n",
                                 n_colors ) ;
 #endif
 
@@ -502,7 +488,7 @@ store_pixels( char * filename, animated_gif * image )
                 }
 
 #if SOBELF_DEBUG
-                printf( "[DEBUG] Found new %d color (%d,%d,%d)\n",
+                printf( "[DEBUG] Found new_p %d color (%d,%d,%d)\n",
                         n_colors, p[i][j].r, p[i][j].g, p[i][j].b ) ;
 #endif
 
@@ -583,291 +569,6 @@ void test (animated_gif * image)
 {
     
 }
-void apply_gray_filter(animated_gif *image)
-{
-    pixel **p;
-    p = image->p;
-
-    int n_images = image->n_images;
-    
-    
-    for (int i = 0; i < n_images; i++) {
-        pixel *d_p;
-        int n_pixels = width[i] * height[i];
-        size_t size_pixels = n_pixels * sizeof(pixel);
-        int nb_threads = 256;
-        int nb_blocks = (size_pixels / nb_threads)+1;
-        int width = image->width[i];
-        int height = image->height[i];
-
-        cudaMalloc(&d_p, size_pixels);
-        cudaMemcpy(d_p, p[i], size_pixels, cudaMemcpyHostToDevice);
-
-        apply_gray_filter_kernel<<<nb_blocks, nb_threads>>>(d_p, width, height);
-        cudaDeviceSynchronize();
-        
-        cudaMemcpy(p[i], d_p, size_pixels, cudaMemcpyDeviceToHost);
-        cudaFree(d_p);
-        p[i] = d_p;
-    }
-}
-__global__ void apply_gray_filter_kernel(pixel * p, int width, int height)
-{
-    int i = blockIdx.x * blockDim.x + ThreadIdx.x;
-    if (j >= width[i] * height[i]) return;
-
-    int moy;
-    moy = (p[j].r + p[j].g + p[j].b) / 3;
-    if (moy < 0) moy = 0;
-    if (moy > 255) moy = 255;
-
-    p[j].r = moy;
-    p[j].g = moy;
-    p[j].b = moy;
-}
-void apply_gray_line( animated_gif * image ) 
-{
-    int i, j, k ;
-    pixel ** p ;
-
-    p = image->p ;
-
-    for ( i = 0 ; i < image->n_images ; i++ )
-    {
-        for ( j = 0 ; j < 10 ; j++ )
-        {
-            for ( k = image->width[i]/2 ; k < image->width[i] ; k++ )
-            {
-            p[i][CONV(j,k,image->width[i])].r = 0 ;
-            p[i][CONV(j,k,image->width[i])].g = 0 ;
-            p[i][CONV(j,k,image->width[i])].b = 0 ;
-            }
-        }
-    }
-}
-
-void
-apply_blur_filter( animated_gif * image, int size, int threshold )
-{
-    int i, j, k ;
-    int width, height ;
-    int end = 0 ;
-    int n_iter = 0 ;
-
-    pixel ** p ;
-    pixel * new ;
-
-    /* Get the pixels of all images */
-    p = image->p ;
-
-
-    /* Process all images */
-    for ( i = 0 ; i < image->n_images ; i++ )
-    {
-        n_iter = 0 ;
-        width = image->width[i] ;
-        height = image->height[i] ;
-
-        /* Allocate array of new pixels */
-        new = (pixel *)malloc(width * height * sizeof( pixel ) ) ;
-
-
-        /* Perform at least one blur iteration */
-        do
-        {
-            end = 1 ;
-            n_iter++ ;
-
-
-	for(j=0; j<height-1; j++)
-	{
-		for(k=0; k<width-1; k++)
-		{
-			new[CONV(j,k,width)].r = p[i][CONV(j,k,width)].r ;
-			new[CONV(j,k,width)].g = p[i][CONV(j,k,width)].g ;
-			new[CONV(j,k,width)].b = p[i][CONV(j,k,width)].b ;
-		}
-	}
-
-            /* Apply blur on top part of image (10%) */
-            for(j=size; j<height/10-size; j++)
-            {
-                for(k=size; k<width-size; k++)
-                {
-                    int stencil_j, stencil_k ;
-                    int t_r = 0 ;
-                    int t_g = 0 ;
-                    int t_b = 0 ;
-
-                    for ( stencil_j = -size ; stencil_j <= size ; stencil_j++ )
-                    {
-                        for ( stencil_k = -size ; stencil_k <= size ; stencil_k++ )
-                        {
-                            t_r += p[i][CONV(j+stencil_j,k+stencil_k,width)].r ;
-                            t_g += p[i][CONV(j+stencil_j,k+stencil_k,width)].g ;
-                            t_b += p[i][CONV(j+stencil_j,k+stencil_k,width)].b ;
-                        }
-                    }
-
-                    new[CONV(j,k,width)].r = t_r / ( (2*size+1)*(2*size+1) ) ;
-                    new[CONV(j,k,width)].g = t_g / ( (2*size+1)*(2*size+1) ) ;
-                    new[CONV(j,k,width)].b = t_b / ( (2*size+1)*(2*size+1) ) ;
-                }
-            }
-
-            /* Copy the middle part of the image */
-            for(j=height/10-size; j<height*0.9+size; j++)
-            {
-                for(k=size; k<width-size; k++)
-                {
-                    new[CONV(j,k,width)].r = p[i][CONV(j,k,width)].r ; 
-                    new[CONV(j,k,width)].g = p[i][CONV(j,k,width)].g ; 
-                    new[CONV(j,k,width)].b = p[i][CONV(j,k,width)].b ; 
-                }
-            }
-
-            /* Apply blur on the bottom part of the image (10%) */
-            for(j=height*0.9+size; j<height-size; j++)
-            {
-                for(k=size; k<width-size; k++)
-                {
-                    int stencil_j, stencil_k ;
-                    int t_r = 0 ;
-                    int t_g = 0 ;
-                    int t_b = 0 ;
-
-                    for ( stencil_j = -size ; stencil_j <= size ; stencil_j++ )
-                    {
-                        for ( stencil_k = -size ; stencil_k <= size ; stencil_k++ )
-                        {
-                            t_r += p[i][CONV(j+stencil_j,k+stencil_k,width)].r ;
-                            t_g += p[i][CONV(j+stencil_j,k+stencil_k,width)].g ;
-                            t_b += p[i][CONV(j+stencil_j,k+stencil_k,width)].b ;
-                        }
-                    }
-
-                    new[CONV(j,k,width)].r = t_r / ( (2*size+1)*(2*size+1) ) ;
-                    new[CONV(j,k,width)].g = t_g / ( (2*size+1)*(2*size+1) ) ;
-                    new[CONV(j,k,width)].b = t_b / ( (2*size+1)*(2*size+1) ) ;
-                }
-            }
-
-            for(j=1; j<height-1; j++)
-            {
-                for(k=1; k<width-1; k++)
-                {
-
-                    float diff_r ;
-                    float diff_g ;
-                    float diff_b ;
-
-                    diff_r = (new[CONV(j  ,k  ,width)].r - p[i][CONV(j  ,k  ,width)].r) ;
-                    diff_g = (new[CONV(j  ,k  ,width)].g - p[i][CONV(j  ,k  ,width)].g) ;
-                    diff_b = (new[CONV(j  ,k  ,width)].b - p[i][CONV(j  ,k  ,width)].b) ;
-
-                    if ( diff_r > threshold || -diff_r > threshold 
-                            ||
-                             diff_g > threshold || -diff_g > threshold
-                             ||
-                              diff_b > threshold || -diff_b > threshold
-                       ) {
-                        end = 0 ;
-                    }
-
-                    p[i][CONV(j  ,k  ,width)].r = new[CONV(j  ,k  ,width)].r ;
-                    p[i][CONV(j  ,k  ,width)].g = new[CONV(j  ,k  ,width)].g ;
-                    p[i][CONV(j  ,k  ,width)].b = new[CONV(j  ,k  ,width)].b ;
-                }
-            }
-
-        }
-        while ( threshold > 0 && !end ) ;
-
-#if SOBELF_DEBUG
-	printf( "BLUR: number of iterations for image %d\n", n_iter ) ;
-#endif
-
-        free (new) ;
-    }
-
-}
-
-void
-apply_sobel_filter( animated_gif * image )
-{
-    int i, j, k ;
-    int width, height ;
-
-    pixel ** p ;
-
-    p = image->p ;
-
-    for ( i = 0 ; i < image->n_images ; i++ )
-    {
-        width = image->width[i] ;
-        height = image->height[i] ;
-
-        pixel * sobel ;
-
-        sobel = (pixel *)malloc(width * height * sizeof( pixel ) ) ;
-
-        for(j=1; j<height-1; j++)
-        {
-            for(k=1; k<width-1; k++)
-            {
-                int pixel_blue_no, pixel_blue_n, pixel_blue_ne;
-                int pixel_blue_so, pixel_blue_s, pixel_blue_se;
-                int pixel_blue_o , pixel_blue  , pixel_blue_e ;
-
-                float deltaX_blue ;
-                float deltaY_blue ;
-                float val_blue;
-
-                pixel_blue_no = p[i][CONV(j-1,k-1,width)].b ;
-                pixel_blue_n  = p[i][CONV(j-1,k  ,width)].b ;
-                pixel_blue_ne = p[i][CONV(j-1,k+1,width)].b ;
-                pixel_blue_so = p[i][CONV(j+1,k-1,width)].b ;
-                pixel_blue_s  = p[i][CONV(j+1,k  ,width)].b ;
-                pixel_blue_se = p[i][CONV(j+1,k+1,width)].b ;
-                pixel_blue_o  = p[i][CONV(j  ,k-1,width)].b ;
-                pixel_blue    = p[i][CONV(j  ,k  ,width)].b ;
-                pixel_blue_e  = p[i][CONV(j  ,k+1,width)].b ;
-
-                deltaX_blue = -pixel_blue_no + pixel_blue_ne - 2*pixel_blue_o + 2*pixel_blue_e - pixel_blue_so + pixel_blue_se;             
-
-                deltaY_blue = pixel_blue_se + 2*pixel_blue_s + pixel_blue_so - pixel_blue_ne - 2*pixel_blue_n - pixel_blue_no;
-
-                val_blue = sqrt(deltaX_blue * deltaX_blue + deltaY_blue * deltaY_blue)/4;
-
-
-                if ( val_blue > 50 ) 
-                {
-                    sobel[CONV(j  ,k  ,width)].r = 255 ;
-                    sobel[CONV(j  ,k  ,width)].g = 255 ;
-                    sobel[CONV(j  ,k  ,width)].b = 255 ;
-                } else
-                {
-                    sobel[CONV(j  ,k  ,width)].r = 0 ;
-                    sobel[CONV(j  ,k  ,width)].g = 0 ;
-                    sobel[CONV(j  ,k  ,width)].b = 0 ;
-                }
-            }
-        }
-
-        for(j=1; j<height-1; j++)
-        {
-            for(k=1; k<width-1; k++)
-            {
-                p[i][CONV(j  ,k  ,width)].r = sobel[CONV(j  ,k  ,width)].r ;
-                p[i][CONV(j  ,k  ,width)].g = sobel[CONV(j  ,k  ,width)].g ;
-                p[i][CONV(j  ,k  ,width)].b = sobel[CONV(j  ,k  ,width)].b ;
-            }
-        }
-
-        free (sobel) ;
-    }
-
-}
 
 /*
  * Main entry point
@@ -875,27 +576,32 @@ apply_sobel_filter( animated_gif * image )
 int 
 main( int argc, char ** argv )
 {
-   // MPI_Init(NULL,NULL);
-
+   MPI_Init(NULL,NULL);
+    
     char * input_filename ; 
     char * output_filename ;
+    char * file_to_save;
     char * N;
     animated_gif * image ;
     struct timeval t1, t2;
     double loading_time,subgroup_time,sobel_time,gathering_time,export_time,full_time;
     double duration ;
-    int rank,size,chunk_size,remainder;
+    int rank,size,chunk_size,remainder,nb_threads;
     int true_chunk_size;
     animated_gif* subgroup;
-    subgroup = (animated_gif*)malloc(sizeof(animated_gif));
-    //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    //MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
     int sendcounts;
     int pos_to_affect;
-    // we need to define a new MPI_Datatype MPI_PIXEL
-    //MPI_Datatype MPI_PIXEL;
-    //MPI_Type_contiguous(3, MPI_INT, &MPI_PIXEL);
-    //MPI_Type_commit(&MPI_PIXEL);
+    int on_gpu;
+    nb_threads  = THREADS;
+    on_gpu = USE_GPU;
+    file_to_save = "collecting_cuda.csv";
+    // we need to define a new_p MPI_Datatype MPI_PIXEL
+    MPI_Datatype MPI_PIXEL;
+    MPI_Type_contiguous(3, MPI_INT, &MPI_PIXEL);
+    MPI_Type_commit(&MPI_PIXEL);
     //printf("%d %d \n",rank,size);
     /* Check command-line arguments */
     if ( argc < 4 )
@@ -903,10 +609,27 @@ main( int argc, char ** argv )
         fprintf( stderr, "Usage: %s input.gif output.gif \n", argv[0] ) ;
         return 1 ;
     }
-
-    input_filename = argv[1] ;
+     input_filename = argv[1] ;
     output_filename = argv[2] ;
     N = argv[3];
+    int opt;
+    while ((opt = getopt(argc, argv, "t:g:f:")) != -1) {
+        
+        switch (opt) {
+        case 't':
+            nb_threads = atoi(optarg);
+            break;
+        case 'g':
+            on_gpu = atoi(optarg);
+            break;
+        case 'f':
+            file_to_save = optarg;
+            break;
+        }
+    }
+
+
+   
 
     /* IMPORT Timer start */
     gettimeofday(&t1, NULL);
@@ -918,33 +641,57 @@ main( int argc, char ** argv )
     gettimeofday(&t2, NULL);
 
     loading_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
-    
-    
+    on_gpu =  on_gpu && test_gpu_available(image->width[0],image->height[0]);
+    int images_restantes;
     if ( image == NULL ) { return 1 ; }
-
-    // we have a new time : the subgroup allocation time
-    /* gettimeofday(&t1, NULL);
-    chunk_size = image->n_images / size;
-    remainder = image->n_images % size;
+    if(on_gpu)
+    {
+       
+        // we have a new_p time : the subgroup allocation time
+        gettimeofday(&t1, NULL);
+        int chunk_size_0;
+        chunk_size_0 = 2 * image->n_images / (size +1);
+        images_restantes = image->n_images - 2 * image->n_images / (size +1);
+        if(rank == 0)
+        {
+            
+            chunk_size = chunk_size_0;
+            true_chunk_size = chunk_size;
+            pos_to_affect = 0;
+        }
+        else
+        {
+            chunk_size = images_restantes / (size-1);
+            remainder = images_restantes % (size-1);
+        //Each one will determine how many images it will have to filters, and which ones
+            int rank_b;
+            rank_b =rank-1;
+            pos_to_affect = 2 * image->n_images / (size +1) + chunk_size * rank_b + (rank_b < remainder ? rank_b : remainder);
+            true_chunk_size = chunk_size + (rank_b < remainder ? 1 : 0);
+        }
+    }
+    else
+    {
+        chunk_size = image->n_images / size;
+        remainder = image->n_images % size;
     // Each one will determine how many images it will have to filters, and which ones
-    pos_to_affect = chunk_size * rank + (rank < remainder ? rank : remainder);
-    true_chunk_size = chunk_size + (rank < remainder ? 1 : 0);
-
+        pos_to_affect = chunk_size * rank + (rank < remainder ? rank : remainder);
+        true_chunk_size = chunk_size + (rank < remainder ? 1 : 0);
+    }
     //Allocation
-    subgroup->width = malloc(true_chunk_size * sizeof(int));
-    subgroup->height = malloc(true_chunk_size * sizeof(int));
+    subgroup = (animated_gif*)malloc(sizeof(animated_gif));
+    subgroup->width = (int*)malloc(true_chunk_size * sizeof(int));
+    subgroup->height = (int*)malloc(true_chunk_size * sizeof(int));
     subgroup->n_images = true_chunk_size;
     subgroup->p = (pixel**) malloc(true_chunk_size  * sizeof(pixel *));
-    
-    subgroup->g = malloc(true_chunk_size * sizeof(GifFileType)); 
+
+     
     // We can't use scatterv with image->p because there are memory problems : les pointeurs sont différents dans chaque process à cause de l'adressage virtuel
-    //MPI_Scatterv(image->height,sendcounts,pos_to_affect,MPI_INT,subgroup->height,sendcounts[rank],MPI_INT,0,MPI_COMM_WORLD);
-    //MPI_Scatterv(image->width,sendcounts,pos_to_affect,MPI_INT,subgroup->width,sendcounts[rank],MPI_INT,0,MPI_COMM_WORLD);
-    //MPI_Scatterv(image->p, sendcounts,pos_to_affect, MPI_PIXEL, subgroup->p, sendcounts[rank], MPI_PIXEL, 0, MPI_COMM_WORLD);
+   
     
     /* IMPORT Timer stop */
     // Each one treat the good images
-    /*int i;
+    int i;
     for(i = 0 ; i<true_chunk_size;i++)
     {
         subgroup->height[i] = image->height[pos_to_affect +i];
@@ -952,78 +699,108 @@ main( int argc, char ** argv )
         subgroup->p[i] = image->p[pos_to_affect +i];
     }
 
-    
     gettimeofday(&t2,NULL);
-    subgroup_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6); */
+    subgroup_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6); 
     
+    
+    //printf("Nombre maximum de blocs pour %d threads: %d\n", total_threads, max_blocks);
 
+    
     
     /* FILTER Timer start */
     //printf("before time t1\n");
     gettimeofday(&t1, NULL);
-    //printf("after time t1\n");
-    /* Convert the pixels into grayscale */
-    apply_gray_filter(image) ;
+    if(rank == 0 && on_gpu )
+    {
+        on_gpu = 1;
+        apply_gray_filter_cuda(subgroup,nb_threads) ;
+   
+        apply_blur_filter_cuda(subgroup,5,20,nb_threads);
 
-    /* Apply blur filter with convergence value */
-    apply_blur_filter(image, 5, 20 ) ;
-    /* Apply sobel filter on pixels */
-    apply_sobel_filter(image) ;
+        apply_sobel_filter_cuda(subgroup,nb_threads) ;
 
+    }
+    else
+    {   
+        on_gpu = 0;
+        apply_gray_filter_v(subgroup) ;
+
+        apply_blur_filter_v(subgroup,5,20);
     
-    //printf("before gather \n");
+        apply_sobel_filter_v(subgroup) ;
+        
+    }
     
-    //printf("after gather \n");
-    /* FILTER Timer stop */
     gettimeofday(&t2, NULL);
     
     sobel_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
 
-    gettimeofday(&t1, NULL);
-    if ( !store_pixels( output_filename, image ) ) { return 1 ; }
-    gettimeofday(&t2, NULL);
 
-    export_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
+    //printf("%lf \n",export_time);
 
     /* EXPORT Timer start */
     
 
     /* Store file from array of pixels to GIF file */
-
-    /* if(rank == 0)
+    
+     if(rank == 0)
     {
         
     // rank 0 doit recevoir les données de tout le monde ça c'est galère
     //gathering Time
-    gettimeofday(&t1,NULL);
-    int * pos_current_rank;
-    pos_current_rank = malloc(size * sizeof(int));
-    for(i = 0; i < size; i ++)
-    {
-        pos_current_rank[0] =0;
-    }
-    // On va recevoir n_images communications 
-    // attention comme on ne sait pas quelle est la taille de l'image recu cela ne marche que si toutes les images on a la même taille
-    pixel * tmp;
-    MPI_Status status;
-    for(i = 0; i < image->n_images - true_chunk_size; i++)
-    {
-        MPI_Status status;
-        //printf("We are waiting for someting \n");
-        pixel* tmp = malloc(image->width[0] * image->height[0] * sizeof(pixel));
-        MPI_Recv(tmp,image->width[0] * image->height[0],MPI_PIXEL,MPI_ANY_SOURCE,0,MPI_COMM_WORLD,&status);
-        //printf("We received something from %d \n",status.MPI_SOURCE);
-        image->p[status.MPI_SOURCE * chunk_size + (status.MPI_SOURCE < remainder ? i : remainder) +pos_current_rank[status.MPI_SOURCE]] = tmp;
-        pos_current_rank[status.MPI_SOURCE]++;
-    }
-    gettimeofday(&t2,NULL);
-    gathering_time =(t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
-    
-    gettimeofday(&t1, NULL);
-    if ( !store_pixels( output_filename, image ) ) { return 1 ; }
-    gettimeofday(&t2, NULL);
+        int chunk_size_b,remainder_b;
+        gettimeofday(&t1,NULL);
+        int * pos_current_rank;
+        pos_current_rank = (int*) malloc(size * sizeof(int));
+        for(i = 0; i < size; i ++)
+        {
+            pos_current_rank[i] =0;
+        }
+        // On va recevoir n_images communications 
+        // attention comme on ne sait pas quelle est la taille de l'image recu cela ne marche que si toutes les images on a la même taille
 
-    export_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
+        MPI_Status status;
+        if(on_gpu)
+        {
+            for(i = 0; i < image->n_images - true_chunk_size; i++)
+            {
+                MPI_Status status;
+                
+                //printf("We are waiting for someting \n");
+                pixel* tmp = (pixel*)malloc(image->width[0] * image->height[0] * sizeof(pixel));
+                MPI_Recv(tmp,image->width[0] * image->height[0],MPI_PIXEL,MPI_ANY_SOURCE,0,MPI_COMM_WORLD,&status);
+                //printf("We received something from %d \n",status.MPI_SOURCE);
+                chunk_size_b = images_restantes / (size-1);
+                remainder_b = images_restantes % (size-1);
+            //Each one will determine how many images it will have to filters, and which ones
+                int rank_b;
+                rank_b = status.MPI_SOURCE-1;
+                pos_to_affect = 2 * image->n_images / (size +1) + chunk_size_b * rank_b + (rank_b < remainder_b ? rank_b : remainder_b);
+                image->p[pos_to_affect +pos_current_rank[status.MPI_SOURCE]] = tmp;
+                pos_current_rank[status.MPI_SOURCE]++;
+            }
+        }
+        else
+        {
+            for(i = 0; i < image->n_images - true_chunk_size; i++)
+            {
+                MPI_Status status;
+                //printf("We are waiting for someting \n");
+                pixel* tmp = (pixel*)  malloc(image->width[0] * image->height[0] * sizeof(pixel));
+                
+                MPI_Recv(tmp,image->width[0] * image->height[0],MPI_PIXEL,MPI_ANY_SOURCE,0,MPI_COMM_WORLD,&status);
+                //printf("We received something from %d \n",status.MPI_SOURCE);
+                image->p[status.MPI_SOURCE * chunk_size + (status.MPI_SOURCE < remainder ? i : remainder) +pos_current_rank[status.MPI_SOURCE]] = tmp;
+                pos_current_rank[status.MPI_SOURCE]++;
+            }
+        }
+        gettimeofday(&t2,NULL);
+        gathering_time =(t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
+        
+        gettimeofday(&t1, NULL);
+        
+        
+
     }
     else
     {
@@ -1037,23 +814,28 @@ main( int argc, char ** argv )
     
 
     //freeing memory 
-    /* free(subgroup->height);
+    MPI_Barrier(MPI_COMM_WORLD);
+    if(rank ==0)
+    {
+    if ( !store_pixels( output_filename, image ) ) { return 1 ; }
+        printf("file done \n");
+        gettimeofday(&t2, NULL);
+        
+        export_time = (t2.tv_sec -t1.tv_sec)+((t2.tv_usec-t1.tv_usec)/1e6);
+         FILE *f = fopen(file_to_save,"a");
+        full_time = loading_time  + sobel_time + export_time;
+        fprintf(f,"%s;%d;%d;%d;%d;%d;%lf;%lf;%lf;%lf \n",input_filename,image->n_images,image->width[0] * image->height[0],on_gpu,nb_threads,size,loading_time,sobel_time,export_time,full_time);
+        fclose(f);
+    }
+    
+    free(subgroup->height);
     free(subgroup->width);
     
     free(subgroup->p);
-    free(subgroup->g);
-    free(subgroup); 
-    //storing data
-    if(rank == 0)
-    {
         //printf("Done for someone \n");
-        FILE *f = fopen("collecting_2.csv","a");
-        full_time = loading_time + subgroup_time + sobel_time + gathering_time + export_time;
-        fprintf(f,"%s;%d;%s;%d;%lf;%lf;%lf;%lf;%lf;%lf \n",input_filename,image->n_images,N,size,loading_time,subgroup_time,sobel_time,gathering_time,export_time,full_time);
-        fclose(f);
-    }
- */ 
+   
     
-    //MPI_Finalize();
+    MPI_Finalize();
     return 0 ;
 }
+

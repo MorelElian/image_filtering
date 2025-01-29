@@ -2,8 +2,9 @@ SRC_DIR=src
 HEADER_DIR=include
 OBJ_DIR=obj
 
-CC=gcc
-CFLAGS=-O3 -I$(HEADER_DIR)
+NVCC=nvcc
+CC=nvcc
+CFLAGS=-O3 -I$(HEADER_DIR) -Xcompiler -fopenmp -ccbin mpicc
 LDFLAGS=-lm
 
 SRC= dgif_lib.c \
@@ -12,9 +13,10 @@ SRC= dgif_lib.c \
 	gif_font.c \
 	gif_hash.c \
 	gifalloc.c \
-	main.c \
+	main.cu \
 	openbsd-reallocarray.c \
-	quantize.c
+	quantize.c \
+
 
 OBJ= $(OBJ_DIR)/dgif_lib.o \
 	$(OBJ_DIR)/egif_lib.o \
@@ -31,11 +33,14 @@ all: $(OBJ_DIR) sobelf
 $(OBJ_DIR):
 	mkdir $(OBJ_DIR)
 
+$(OBJ_DIR)/%.o : $(SRC_DIR)/%.cu
+	$(NVCC) $(CFLAGS) -c -o $@ $^
+
 $(OBJ_DIR)/%.o : $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $^
 
 sobelf:$(OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(NVCC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
 	rm -f sobelf $(OBJ)

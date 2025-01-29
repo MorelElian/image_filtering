@@ -1,0 +1,8 @@
+#!/bin/bash -l
+#SBATCH -N 1
+
+    for nprocs in {3..3}
+    do
+      mpirun -n $nprocs ./sobelf ./images/original/1.gif ./images/processed/12.gif 1 -g 0 -f "collecting_cuda_vanilla.csv"
+    done
+done
